@@ -2,24 +2,27 @@ use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::{format, vec};
 use alloc::vec::Vec;
-use core::cmp::{max, min};
+use core::cmp::{min};
 use core::fmt::{Debug, Display, Formatter};
 use fat32_trait::{DirectoryLike, FileLike};
-use jammdb::{ Data, DB};
+use jammdb::{Data, DB, FileOpenOptions, Mmap};
 use logger::info;
 
+
+
+
 pub struct FileSystem {
-    db: Arc<DB>,
+    db: Arc<SafeDb>,
 }
 
 impl FileSystem {
     pub fn init() -> Self {
-        let db = DB::open("jammdb").unwrap();
-        Self { db: Arc::new(db) }
+        let db = DB::open::<_,FileOpenOptions,Mmap>("jammdb").unwrap();
+        Self { db: Arc::new(SafeDb(db)) }
     }
     pub fn root(&self) -> Arc<DirEntry> {
         // 检查根目录是否存在
-        let tx = self.db.tx(true).unwrap();
+        let tx = self.db.0.tx(true).unwrap();
         let _root = tx.get_or_create_bucket("root").unwrap();
         tx.commit().unwrap();
         Arc::new(DirEntry::new(self.db.clone(), "root".to_string()))
@@ -27,11 +30,14 @@ impl FileSystem {
 }
 
 pub struct File {
-    db: Arc<DB>,
+    db: Arc<SafeDb>,
     name: String,
     dir: Arc<DirEntry>,
 }
 
+pub struct SafeDb(DB);
+unsafe impl Sync for SafeDb {}
+unsafe impl Send for SafeDb {}
 
 impl Debug for File{
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
@@ -44,7 +50,7 @@ impl Debug for File{
 
 
 pub struct DirEntry {
-    db: Arc<DB>,
+    db: Arc<SafeDb>,
     path: String,
 }
 
@@ -57,7 +63,7 @@ impl Debug for DirEntry{
 }
 
 impl File {
-    pub fn new(db: Arc<DB>, name: &str, dir: Arc<DirEntry>) -> Self {
+    pub fn new(db: Arc<SafeDb>, name: &str, dir: Arc<DirEntry>) -> Self {
         Self {
             db,
             name: name.to_string(),
@@ -67,7 +73,7 @@ impl File {
 }
 
 impl DirEntry {
-    pub fn new(db: Arc<DB>, path: String) -> Self {
+    pub fn new(db: Arc<SafeDb>, path: String) -> Self {
         Self { db, path }
     }
 }
@@ -78,7 +84,7 @@ impl FileLike for File {
     type Error = Error;
 
     fn read(&self, offset: u32, size: u32) -> Result<Vec<u8>, Self::Error> {
-        let tx = self.db.tx(false)?;
+        let tx = self.db.0.tx(false)?;
         let bucket = tx.get_bucket(self.dir.path.as_str())?;
 
         let bucket = bucket.get_bucket(self.name.as_str())?;
@@ -97,14 +103,14 @@ impl FileLike for File {
     }
 
     fn write(&self, offset: u32, w_data: &[u8]) -> Result<u32, Self::Error> {
-        let tx = self.db.tx(true)?;
+        let tx = self.db.0.tx(true)?;
         let bucket = tx.get_bucket(self.dir.path.as_str())?;
         let bucket = bucket.get_bucket(self.name.as_str())?;
         let data = bucket.get("data").unwrap();
         let mut data = data.kv().value().to_vec();
         if (data.len() as u32) < offset {
             data.resize(offset as usize, 0);
-            for i in data.len()..offset as usize{
+            for _ in data.len()..offset as usize{
                 data.push(0);
             }
         }
@@ -119,7 +125,7 @@ impl FileLike for File {
     }
 
     fn clear(&self) {
-        let tx = self.db.tx(true).unwrap();
+        let tx = self.db.0.tx(true).unwrap();
         let bucket = tx.get_bucket(self.dir.path.as_str()).unwrap();
         let bucket = bucket.get_bucket(self.name.as_str()).unwrap();
         bucket.put("data", vec![]).unwrap();
@@ -127,7 +133,7 @@ impl FileLike for File {
     }
 
     fn size(&self) -> u32 {
-        let tx = self.db.tx(false).unwrap();
+        let tx = self.db.0.tx(false).unwrap();
         let bucket = tx.get_bucket(self.dir.path.as_str()).unwrap();
         let bucket = bucket.get_bucket(self.name.as_str()).unwrap();
         let data = bucket.get("data").unwrap();
@@ -140,7 +146,7 @@ impl DirectoryLike for DirEntry {
     type Error = Error;
 
     fn create_dir(&self, name: &str) -> Result<(), Self::Error> {
-        let tx = self.db.tx(true)?;
+        let tx = self.db.0.tx(true)?;
         let bucket = tx.get_bucket(self.path.as_str())?;
         bucket.create_bucket(name).unwrap();
         tx.commit().unwrap();
@@ -149,7 +155,7 @@ impl DirectoryLike for DirEntry {
 
     fn create_file(&self, name: &str) -> Result<(), Self::Error> {
         {
-            let tx = self.db.tx(true)?;
+            let tx = self.db.0.tx(true)?;
             let bucket = tx.get_bucket(self.path.as_str())?;
             let bucket = bucket.create_bucket(name).unwrap();
             bucket.put("data", vec![]).unwrap();
@@ -159,7 +165,7 @@ impl DirectoryLike for DirEntry {
     }
 
     fn delete_dir(&self, name: &str) -> Result<(), Self::Error> {
-        let tx = self.db.tx(true)?;
+        let tx = self.db.0.tx(true)?;
         let bucket = tx.get_bucket(self.path.as_str())?;
         bucket.delete_bucket(name).unwrap();
         tx.commit().unwrap();
@@ -167,7 +173,7 @@ impl DirectoryLike for DirEntry {
     }
 
     fn delete_file(&self, name: &str) -> Result<(), Self::Error> {
-        let tx = self.db.tx(true)?;
+        let tx = self.db.0.tx(true)?;
         let bucket = tx.get_bucket(self.path.as_str())?;
         bucket.delete_bucket(name)?;
         tx.commit().unwrap();
@@ -175,14 +181,14 @@ impl DirectoryLike for DirEntry {
     }
 
     fn cd(&self, name: &str) -> Result<Arc<dyn DirectoryLike<Error = Self::Error>>, Self::Error> {
-        let tx = self.db.tx(false)?;
+        let tx = self.db.0.tx(false)?;
         let bucket = tx.get_bucket(self.path.as_str())?;
         let _bucket = bucket.get_bucket(name)?;
         Ok(Arc::new(DirEntry::new(self.db.clone(), format!("{}/{}", self.path, name))))
     }
 
     fn open(&self, name: &str) -> Result<Arc<dyn FileLike<Error = Self::Error>>, Self::Error> {
-        let tx = self.db.tx(false)?;
+        let tx = self.db.0.tx(false)?;
         let bucket = tx.get_bucket(self.path.as_str())?;
         let _bucket = bucket.get_bucket(name)?;
         let dir = Arc::new(DirEntry::new(self.db.clone(), self.path.clone()));
@@ -190,7 +196,7 @@ impl DirectoryLike for DirEntry {
     }
 
     fn list(&self) -> Result<Vec<String>, Self::Error> {
-        let tx = self.db.tx(false)?;
+        let tx = self.db.0.tx(false)?;
         let bucket = tx.get_bucket(self.path.as_str())?;
         let mut list = Vec::new();
         bucket.cursor().into_iter().for_each(|data|{
@@ -207,7 +213,7 @@ impl DirectoryLike for DirEntry {
         if old_name==new_name{
             return Ok(())
         }
-        let tx = self.db.tx(true)?;
+        let tx = self.db.0.tx(true)?;
         let r_bucket = tx.get_bucket(self.path.as_str())?;
         let bucket = r_bucket.get_bucket(old_name).unwrap();
         let data = bucket.get("data").unwrap();

@@ -1,14 +1,8 @@
 
 use fat32_trait::DirectoryLike;
-use jammdb::Data;
 use logger::init_logger;
 use dbfs::FileSystem;
 
-macro_rules! T {
-    ($x:ident,$v:expr) => {
-        let $x = $v[0];
-    };
-}
 fn main(){
     init_logger();
     let fs = FileSystem::init();

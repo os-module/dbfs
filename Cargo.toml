@@ -8,6 +8,4 @@ edition = "2021"
 [dependencies]
 jammdb = {path = "../jammdb"}
 fat32-trait = {path = "../fs/fat32-trait"}
-
-
 logger = {path="../logger"}
