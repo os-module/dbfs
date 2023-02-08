@@ -6,3 +6,5 @@ extern crate alloc;
 mod fs;
 
 pub use fs::{DbFileSystem, Dir, Error, File};
+
+pub use jammdb;
