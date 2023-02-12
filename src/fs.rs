@@ -106,6 +106,8 @@ impl <M:MemoryMap+'static> FileLike for File<M> {
 
 impl <M:MemoryMap+'static> DirectoryLike for Dir<M> {
     type Error = Error;
+    type FError = Error;
+
     /// 所有文件和目录位于虚拟的根目录下
     fn create_dir(&self, name: &str) -> Result<(), Self::Error> {
         let tx = self.db.0.tx(true)?;
@@ -206,7 +208,7 @@ impl <M:MemoryMap+'static> DirectoryLike for Dir<M> {
         ans
     }
 
-    fn cd(&self, name: &str) -> Result<Arc<dyn DirectoryLike<Error = Self::Error>>, Self::Error> {
+    fn cd(&self, name: &str) -> Result<Arc<dyn DirectoryLike<Error = Self::Error, FError=Self::FError>>, Self::Error> {
         let tx = self.db.0.tx(false)?;
         let bucket = tx.get_bucket(self.path.as_str())?;
         let bucket = bucket.get_bucket("data")?;

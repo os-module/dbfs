@@ -9,4 +9,3 @@ edition = "2021"
 jammdb = {path = "../jammdb"}
 fat32-trait = {path = "../fs/fat32-trait"}
 log = "0.4.14"
-bytes = "1.1.0"
